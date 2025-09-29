@@ -1,63 +1,111 @@
-import json
-import time
-import threading
 from netfilterqueue import NetfilterQueue
-from scapy.all import IP, TCP
+from scapy.all import IP, TCP, UDP, ICMP, DNS, DNSQR
+import os
+import sys
 
-rules = {}
+# ========== CẤU HÌNH RULES ==========
 
-def load_rules():
-    global rules
-    try:
-        with open("rules.json", "r") as f:
-            rules = json.load(f)
-    except Exception as e:
-        print("[ERROR] Could not load rules.json:", e)
+# Danh sách domain bị chặn
+BLOCKED_DOMAINS = [
+    "facebook.com",
+    "tiktok.com",
+]
 
-# Thread để reload rules.json định kỳ
-def auto_reload(interval=5):
-    while True:
-        load_rules()
-        time.sleep(interval)
+# Danh sách IP bị chặn
+BLOCKED_IPS = [
+    "31.13.",  # Facebook IP range
+]
+
+# Danh sách port bị chặn
+BLOCKED_PORTS = [
+    # 22,  # SSH (uncomment để chặn)
+]
+
+# ========== HÀM XỬ LÝ PACKET ==========
 
 def process_packet(packet):
-    scapy_pkt = IP(packet.get_payload())
-    src_ip = scapy_pkt.src
-    dst_ip = scapy_pkt.dst
-    proto = scapy_pkt.proto
-
-    verdict = "ACCEPT"
-
-    # Rule 1: Block theo IP nguồn
-    if src_ip in rules.get("block_ip", []):
-        verdict = "DROP (src_ip)"
-        packet.drop()
-    # Rule 2: Block theo port đích TCP
-    elif proto == 6 and scapy_pkt.haslayer(TCP):
-        dport = scapy_pkt[TCP].dport
-        if dport in rules.get("block_dst_port", []):
-            verdict = f"DROP (dport={dport})"
-            packet.drop()
-        else:
-            packet.accept()
-    else:
+    try:
+        scapy_packet = IP(packet.get_payload())
+        
+        # Lấy thông tin cơ bản
+        src_ip = scapy_packet[IP].src
+        dst_ip = scapy_packet[IP].dst
+        protocol = scapy_packet[IP].proto
+        
+        # Xác định protocol name
+        proto_name = {1: "ICMP", 6: "TCP", 17: "UDP"}.get(protocol, f"Proto-{protocol}")
+        
+        # Lấy port info nếu có
+        port_info = ""
+        if scapy_packet.haslayer(TCP):
+            dst_port = scapy_packet[TCP].dport
+            port_info = f":{dst_port}"
+            
+            # Rule: Chặn port cụ thể
+            if dst_port in BLOCKED_PORTS:
+                print(f"[BLOCKED] {proto_name} {src_ip} → {dst_ip}:{dst_port} (Port blocked)")
+                packet.drop()
+                return
+                
+        elif scapy_packet.haslayer(UDP):
+            dst_port = scapy_packet[UDP].dport
+            port_info = f":{dst_port}"
+        
+        # Rule: Chặn DNS queries cho domain bị chặn
+        if scapy_packet.haslayer(DNS) and scapy_packet.haslayer(DNSQR):
+            queried_domain = scapy_packet[DNSQR].qname.decode('utf-8').lower()
+            
+            for blocked in BLOCKED_DOMAINS:
+                if blocked in queried_domain:
+                    print(f"[BLOCKED] DNS {src_ip} → {queried_domain.strip('.')} (Domain blocked)")
+                    packet.drop()
+                    return
+        
+        # Rule: Chặn IP bị chặn
+        for blocked_ip in BLOCKED_IPS:
+            if dst_ip.startswith(blocked_ip):
+                print(f"[BLOCKED] {proto_name} {src_ip} → {dst_ip}{port_info} (IP blocked)")
+                packet.drop()
+                return
+        
+        # ACCEPT: Cho qua nếu không vi phạm rules
+        print(f"[PASS] {proto_name} {src_ip} → {dst_ip}{port_info}")
         packet.accept()
+        
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        packet.accept()  # Khi lỗi, cho qua để tránh gián đoạn
 
-    print(f"[{verdict}] {src_ip} -> {dst_ip} (proto={proto})")
+# ========== MAIN ==========
 
 def main():
-    # Khởi động thread reload rules
-    threading.Thread(target=auto_reload, daemon=True).start()
-
-    nfqueue = NetfilterQueue()
-    nfqueue.bind(0, process_packet)
+    # Kiểm tra quyền root
+    if os.geteuid() != 0:
+        print("[!] Script phải chạy với quyền root!")
+        print("Chạy: sudo python3 firewall.py")
+        sys.exit(1)
+    
+    print("=" * 70)
+    print(" PYTHON FIREWALL - VM ROUTER")
+    print("=" * 70)
+    print("[*] Đang khởi động...")
+    
+    # Bind với NFQUEUE
+    queue = NetfilterQueue()
+    queue.bind(0, process_packet)
+    
+    print("[*] Firewall đã sẵn sàng!")
+    print("[*] Nhấn Ctrl+C để dừng\n")
+    print("-" * 70)
+    
     try:
-        print("Firewall đang chạy... Nhấn Ctrl+C để dừng.")
-        nfqueue.run()
+        queue.run()
     except KeyboardInterrupt:
-        print("Stopping firewall...")
+        print("\n" + "-" * 70)
+        print("[*] Đang dừng firewall...")
     finally:
-        nfqueue.unbind()
+        queue.unbind()
+        print("[*] Đã dừng!")
 
 if __name__ == "__main__":
     main()
