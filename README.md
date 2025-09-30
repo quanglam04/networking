@@ -39,11 +39,11 @@ Project này xây dựng một **custome firewall** có khả năng lọc gói t
 ### Basic Design
 
 <p align="center">
-  <img src="BD.drawio.png" alt="Project image" style="max-width:100%;height:auto;" />
+  <img src="img/BD.png" alt="Project image" style="max-width:100%;height:auto;" />
 </p>
 
 ### Detail Design
 
 <p align="center">
-  <img src="network.jpg" alt="Project image" style="max-width:100%;height:auto;" />
+  <img src="img/DD.jpg" alt="Project image" style="max-width:100%;height:auto;" />
 </p>
