@@ -1,4 +1,20 @@
 {
-  "block_ip": ["192.168.1.69"],
-  "block_dst_port": []
+  "blocked_domains": [
+    "facebook.com",	
+    "tiktok.com",
+    "instagram.com"
+  ],
+  "blocked_ips": [
+    "31.13.",
+    "157.240."
+  ],
+  "blocked_ports": [
+    22,
+    23,
+    3389
+  ],
+  "allowed_ips": [],
+  "allowed_domains": [],
+  "log_all_traffic": false,
+  "block_icmp": false
 }
