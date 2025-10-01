@@ -16,5 +16,35 @@
   "allowed_ips": [],
   "allowed_domains": [],
   "log_all_traffic": false,
-  "block_icmp": false
+  "block_icmp": false,
+  "time_based_rules": {
+    "enabled": true,
+    "timezone": "Asia/Ho_Chi_Minh",
+    "rules": [
+      {
+        "name": "Block social media during work hours",
+        "domains": ["facebook.com", "tiktok.com", "instagram.com"],
+        "days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+        "start_time": "08:00",
+        "end_time": "17:00",
+        "action": "block"
+      },
+      {
+        "name": "Block YouTube at night",
+        "domains": ["youtube.com", "youtu.be"],
+        "days": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+        "start_time": "22:00",
+        "end_time": "06:00",
+        "action": "block"
+      },
+      {
+        "name": "Allow gaming only on weekend",
+        "domains": ["steam.com", "epicgames.com"],
+        "days": ["saturday", "sunday"],
+        "start_time": "00:00",
+        "end_time": "23:59",
+        "action": "allow"
+      }
+    ]
+  }
 }
