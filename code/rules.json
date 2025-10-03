@@ -1,8 +1,10 @@
 {
   "blocked_domains": [
-    "facebook.com",	
+    "facebook.com",
     "tiktok.com",
-    "instagram.com"
+    "instagram.com",
+    "reddit.com"
+	
   ],
   "blocked_ips": [
     "31.13.",
@@ -15,8 +17,17 @@
   ],
   "allowed_ips": [],
   "allowed_domains": [],
-  "log_all_traffic": false,
+  "log_all_traffic": true,
   "block_icmp": false,
+  
+  "rate_limiting": {
+    "enabled": false,
+    "max_packets_per_second": 5,
+    "max_connections_per_ip": 10,
+    "max_dns_queries_per_minute": 20,
+    "action": "drop"
+  },
+  
   "time_based_rules": {
     "enabled": true,
     "timezone": "Asia/Ho_Chi_Minh",
