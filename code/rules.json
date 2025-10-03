@@ -17,11 +17,11 @@
   ],
   "allowed_ips": [],
   "allowed_domains": [],
-  "log_all_traffic": false,
+  "log_all_traffic": true,
   "block_icmp": false,
   
   "rate_limiting": {
-    "enabled": true,
+    "enabled": false,
     "max_packets_per_second": 5,
     "max_connections_per_ip": 10,
     "max_dns_queries_per_minute": 20,

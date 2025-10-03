@@ -6,7 +6,95 @@ import sys
 import json
 from pathlib import Path
 from datetime import datetime
+from collections import defaultdict
 import pytz
+import time
+
+
+# ========== RATE LIMITING CLASS ==========
+class RateLimiter:
+    def __init__(self):
+        self.packet_counter = defaultdict(list)      # IP -> [timestamps]
+        self.connection_counter = defaultdict(int)   # IP -> số connections
+        self.dns_queries = defaultdict(list)         # IP -> [timestamps]
+        self.cleanup_interval = 60
+        self.last_cleanup = time.time()
+    
+    def cleanup_old_data(self):
+        """Xóa dữ liệu cũ để tránh memory leak"""
+        current_time = time.time()
+        
+        if current_time - self.last_cleanup < self.cleanup_interval:
+            return
+        
+        # Cleanup packet counter (giữ lại 1 giây)
+        for ip in list(self.packet_counter.keys()):
+            self.packet_counter[ip] = [t for t in self.packet_counter[ip] if current_time - t < 1]
+            if not self.packet_counter[ip]:
+                del self.packet_counter[ip]
+        
+        # Cleanup DNS queries (giữ lại 60 giây)
+        for ip in list(self.dns_queries.keys()):
+            self.dns_queries[ip] = [t for t in self.dns_queries[ip] if current_time - t < 60]
+            if not self.dns_queries[ip]:
+                del self.dns_queries[ip]
+        
+        self.last_cleanup = current_time
+    
+    def check_packet_rate(self, ip, max_pps):
+        """Kiểm tra số packets per second từ một IP"""
+        current_time = time.time()
+        
+        # Lọc timestamps trong 1 giây qua
+        self.packet_counter[ip] = [t for t in self.packet_counter[ip] if current_time - t < 1]
+        
+        # Thêm timestamp hiện tại
+        self.packet_counter[ip].append(current_time)
+        
+        # Kiểm tra vượt ngưỡng
+        return len(self.packet_counter[ip]) > max_pps
+    
+    def check_dns_rate(self, ip, max_queries_per_minute):
+        """Kiểm tra số DNS queries per minute từ một IP"""
+        current_time = time.time()
+        
+        # Lọc timestamps trong 60 giây qua
+        self.dns_queries[ip] = [t for t in self.dns_queries[ip] if current_time - t < 60]
+        
+        # Thêm timestamp hiện tại
+        self.dns_queries[ip].append(current_time)
+        
+        # Kiểm tra vượt ngưỡng
+        return len(self.dns_queries[ip]) > max_queries_per_minute
+    
+    def increment_connection(self, ip):
+        """Tăng số connection từ một IP"""
+        self.connection_counter[ip] += 1
+    
+    def check_connection_limit(self, ip, max_connections):
+        """Kiểm tra số connections từ một IP"""
+        return self.connection_counter[ip] > max_connections
+    
+    def get_stats(self, ip):
+        """Lấy thống kê rate limiting cho một IP"""
+        current_time = time.time()
+        
+        # Packets per second
+        recent_packets = [t for t in self.packet_counter.get(ip, []) if current_time - t < 1]
+        pps = len(recent_packets)
+        
+        # DNS queries per minute
+        recent_dns = [t for t in self.dns_queries.get(ip, []) if current_time - t < 60]
+        qpm = len(recent_dns)
+        
+        # Connections
+        connections = self.connection_counter.get(ip, 0)
+        
+        return {
+            'pps': pps,
+            'qpm': qpm,
+            'connections': connections
+        }
 
 
 # ========== HÀM LOG CÓ THỜI GIAN ==========
@@ -55,6 +143,13 @@ def create_default_rules(rules_path):
         "allowed_domains": [],
         "log_all_traffic": False,
         "block_icmp": False,
+        "rate_limiting": {
+            "enabled": True,
+            "max_packets_per_second": 100,
+            "max_connections_per_ip": 50,
+            "max_dns_queries_per_minute": 60,
+            "action": "drop"
+        },
         "time_based_rules": {
             "enabled": True,
             "timezone": "Asia/Ho_Chi_Minh",
@@ -118,6 +213,17 @@ def print_rules_summary(rules):
     log(f"Block ICMP: {'Yes' if rules.get('block_icmp') else 'No'}")
     log(f"Log All Traffic: {'Yes' if rules.get('log_all_traffic') else 'No'}")
 
+    # Rate limiting summary
+    rate_limit = rules.get('rate_limiting', {})
+    if rate_limit.get('enabled'):
+        log(f"Rate Limiting: Enabled")
+        log(f"  Max Packets/Second: {rate_limit.get('max_packets_per_second', 100)}")
+        log(f"  Max Connections/IP: {rate_limit.get('max_connections_per_ip', 50)}")
+        log(f"  Max DNS Queries/Minute: {rate_limit.get('max_dns_queries_per_minute', 60)}")
+        log(f"  Action: {rate_limit.get('action', 'drop').upper()}")
+    else:
+        log("Rate Limiting: Disabled")
+
     # Time-based rules summary
     time_rules = rules.get('time_based_rules', {})
     if time_rules.get('enabled'):
@@ -179,13 +285,19 @@ RULES = {}
 RULES_FILE = "rules.json"
 LAST_MTIME = 0
 PACKET_COUNT = 0
+RATE_LIMITER = RateLimiter()
 
 
 # ========== HÀM XỬ LÝ PACKET ==========
 def process_packet(packet):
-    global RULES, LAST_MTIME, PACKET_COUNT
+    global RULES, LAST_MTIME, PACKET_COUNT, RATE_LIMITER
+    
+    # Cleanup old data định kỳ
+    RATE_LIMITER.cleanup_old_data()
+    
+    # Kiểm tra và reload rules nếu file thay đổi
     PACKET_COUNT += 1
-    if PACKET_COUNT % 5 == 0:
+    if PACKET_COUNT % 5  == 0:
         new_rules, new_mtime = reload_rules_if_changed(RULES_FILE, LAST_MTIME)
         if new_rules:
             RULES = new_rules
@@ -203,10 +315,43 @@ def process_packet(packet):
         if scapy_packet.haslayer(TCP):
             dst_port = scapy_packet[TCP].dport
             port_info = f":{dst_port}"
+            # Track TCP SYN connections
+            if scapy_packet[TCP].flags & 0x02:  # SYN flag
+                RATE_LIMITER.increment_connection(src_ip)
         elif scapy_packet.haslayer(UDP):
             dst_port = scapy_packet[UDP].dport
             port_info = f":{dst_port}"
 
+        # ========== KIỂM TRA RATE LIMITING (ƯU TIÊN CAO) ==========
+        rate_limit_config = RULES.get('rate_limiting', {})
+        
+        if rate_limit_config.get('enabled'):
+            # Kiểm tra packet rate
+            max_pps = rate_limit_config.get('max_packets_per_second', 100)
+            if RATE_LIMITER.check_packet_rate(src_ip, max_pps):
+                stats = RATE_LIMITER.get_stats(src_ip)
+                log(f"[RATE_LIMIT] {src_ip} → {dst_ip}{port_info} | PPS: {stats['pps']} (limit: {max_pps})")
+                packet.drop()
+                return
+            
+            # Kiểm tra connection limit
+            max_conn = rate_limit_config.get('max_connections_per_ip', 50)
+            if RATE_LIMITER.check_connection_limit(src_ip, max_conn):
+                stats = RATE_LIMITER.get_stats(src_ip)
+                log(f"[RATE_LIMIT] {src_ip} → {dst_ip}{port_info} | Connections: {stats['connections']} (limit: {max_conn})")
+                packet.drop()
+                return
+            
+            # Kiểm tra DNS query rate
+            if scapy_packet.haslayer(DNS) and scapy_packet.haslayer(DNSQR):
+                max_dns = rate_limit_config.get('max_dns_queries_per_minute', 60)
+                if RATE_LIMITER.check_dns_rate(src_ip, max_dns):
+                    stats = RATE_LIMITER.get_stats(src_ip)
+                    log(f"[RATE_LIMIT] {src_ip} DNS flood | QPM: {stats['qpm']} (limit: {max_dns})")
+                    packet.drop()
+                    return
+
+        # ========== KIỂM TRA ALLOWED IPS ==========
         for allowed_ip in RULES.get('allowed_ips', []):
             if dst_ip.startswith(allowed_ip):
                 if RULES.get('log_all_traffic', False):
@@ -214,13 +359,17 @@ def process_packet(packet):
                 packet.accept()
                 return
 
+        # ========== KIỂM TRA BLOCK ICMP ==========
         if RULES.get('block_icmp', False) and scapy_packet.haslayer(ICMP):
             log(f"[BLOCKED] ICMP {src_ip} → {dst_ip} (ICMP blocked)")
             packet.drop()
             return
 
+        # ========== XỬ LÝ DNS QUERIES ==========
         if scapy_packet.haslayer(DNS) and scapy_packet.haslayer(DNSQR):
             queried_domain = scapy_packet[DNSQR].qname.decode('utf-8').lower()
+            
+            # Kiểm tra time-based rules
             time_action = check_time_based_rules(queried_domain, RULES)
             if time_action == "block":
                 log(f"[BLOCKED] DNS {src_ip} → {queried_domain.strip('.')} (Time-based rule)")
@@ -230,33 +379,41 @@ def process_packet(packet):
                 log(f"[ALLOW] DNS {src_ip} → {queried_domain.strip('.')} (Time-based allow)")
                 packet.accept()
                 return
+            
+            # Kiểm tra allowed domains
             for allowed in RULES.get('allowed_domains', []):
                 if allowed in queried_domain:
                     if RULES.get('log_all_traffic', False):
                         log(f"[ALLOW] DNS {src_ip} → {queried_domain.strip('.')} (Whitelisted)")
                     packet.accept()
                     return
+            
+            # Kiểm tra blocked domains
             for blocked in RULES.get('blocked_domains', []):
                 if blocked in queried_domain:
                     log(f"[BLOCKED] DNS {src_ip} → {queried_domain.strip('.')} (Domain blocked)")
                     packet.drop()
                     return
 
+        # ========== KIỂM TRA BLOCKED IPS ==========
         for blocked_ip in RULES.get('blocked_ips', []):
             if dst_ip.startswith(blocked_ip):
                 log(f"[BLOCKED] {proto_name} {src_ip} → {dst_ip}{port_info} (IP blocked)")
                 packet.drop()
                 return
 
+        # ========== KIỂM TRA BLOCKED PORTS ==========
         if dst_port and dst_port in RULES.get('blocked_ports', []):
             log(f"[BLOCKED] {proto_name} {src_ip} → {dst_ip}:{dst_port} (Port blocked)")
             packet.drop()
             return
 
+        # ========== ACCEPT: Cho qua nếu không vi phạm ==========
         if RULES.get('log_all_traffic', False):
             log(f"[PASS] {proto_name} {src_ip} → {dst_ip}{port_info}")
 
         packet.accept()
+        
     except Exception as e:
         log(f"[ERROR] {e}")
         packet.accept()
@@ -272,7 +429,7 @@ def main():
         sys.exit(1)
 
     log("=" * 70)
-    log(" PYTHON FIREWALL - VM ROUTER (Time-based Rules)")
+    log(" PYTHON FIREWALL - VM ROUTER (Rate Limiting + Time-based Rules)")
     log("=" * 70)
     log("[*] Đang khởi động...")
 
