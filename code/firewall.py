@@ -9,31 +9,110 @@ from datetime import datetime
 from collections import defaultdict
 import pytz
 import time
+import geoip2.database
+import geoip2.errors
+
+
+# ========== GEO-BLOCKING CLASS ==========
+class GeoBlocker:
+    def __init__(self, db_path):
+        self.reader = None
+        self.db_path = db_path
+        self.cache = {}  # IP -> Country code cache
+        self.cache_size_limit = 10000
+        
+        try:
+            if not os.path.exists(db_path):
+                log(f"[!] GeoIP database không tồn tại: {db_path}")
+                log("[!] Geo-blocking sẽ bị tắt")
+                return
+            
+            self.reader = geoip2.database.Reader(db_path)
+            log(f"[✓] Đã load GeoIP database: {db_path}")
+        except Exception as e:
+            log(f"[!] Lỗi load GeoIP database: {e}")
+            log("[!] Geo-blocking sẽ bị tắt")
+    
+    def get_country(self, ip):
+        """Lấy country code từ IP"""
+        if self.reader is None:
+            return None
+        
+        # Kiểm tra cache
+        if ip in self.cache:
+            return self.cache[ip]
+        
+        try:
+            response = self.reader.country(ip)
+            country_code = response.country.iso_code
+            
+            # Lưu vào cache
+            if len(self.cache) < self.cache_size_limit:
+                self.cache[ip] = country_code
+            
+            return country_code
+        except geoip2.errors.AddressNotFoundError:
+            # IP không tìm thấy trong database (có thể là IP private)
+            return None
+        except Exception as e:
+            log(f"[!] Lỗi lookup GeoIP cho {ip}: {e}")
+            return None
+    
+    def should_block(self, ip, config):
+        """
+        Kiểm tra xem IP có nên bị chặn theo geo rules không
+        Returns: (should_block: bool, country_code: str, reason: str)
+        """
+        if not config.get('enabled'):
+            return False, None, None
+        
+        country = self.get_country(ip)
+        
+        if country is None:
+            # IP không xác định được quốc gia (private IP, localhost...)
+            return False, None, "Unknown country"
+        
+        mode = config.get('mode', 'blacklist')
+        blocked_countries = config.get('blocked_countries', [])
+        allowed_countries = config.get('allowed_countries', [])
+        
+        if mode == 'blacklist':
+            # Chặn các quốc gia trong blacklist
+            if country in blocked_countries:
+                return True, country, f"Country {country} in blacklist"
+        
+        elif mode == 'whitelist':
+            # Chỉ cho phép các quốc gia trong whitelist
+            if country not in allowed_countries:
+                return True, country, f"Country {country} not in whitelist"
+        
+        return False, country, None
+    
+    def close(self):
+        """Đóng database connection"""
+        if self.reader:
+            self.reader.close()
 
 
 # ========== RATE LIMITING CLASS ==========
 class RateLimiter:
     def __init__(self):
-        self.packet_counter = defaultdict(list)      # IP -> [timestamps]
-        self.connection_counter = defaultdict(int)   # IP -> số connections
-        self.dns_queries = defaultdict(list)         # IP -> [timestamps]
+        self.packet_counter = defaultdict(list)
+        self.connection_counter = defaultdict(int)
+        self.dns_queries = defaultdict(list)
         self.cleanup_interval = 60
         self.last_cleanup = time.time()
     
     def cleanup_old_data(self):
-        """Xóa dữ liệu cũ để tránh memory leak"""
         current_time = time.time()
-        
         if current_time - self.last_cleanup < self.cleanup_interval:
             return
         
-        # Cleanup packet counter (giữ lại 1 giây)
         for ip in list(self.packet_counter.keys()):
             self.packet_counter[ip] = [t for t in self.packet_counter[ip] if current_time - t < 1]
             if not self.packet_counter[ip]:
                 del self.packet_counter[ip]
         
-        # Cleanup DNS queries (giữ lại 60 giây)
         for ip in list(self.dns_queries.keys()):
             self.dns_queries[ip] = [t for t in self.dns_queries[ip] if current_time - t < 60]
             if not self.dns_queries[ip]:
@@ -42,62 +121,35 @@ class RateLimiter:
         self.last_cleanup = current_time
     
     def check_packet_rate(self, ip, max_pps):
-        """Kiểm tra số packets per second từ một IP"""
         current_time = time.time()
-        
-        # Lọc timestamps trong 1 giây qua
         self.packet_counter[ip] = [t for t in self.packet_counter[ip] if current_time - t < 1]
-        
-        # Thêm timestamp hiện tại
         self.packet_counter[ip].append(current_time)
-        
-        # Kiểm tra vượt ngưỡng
         return len(self.packet_counter[ip]) > max_pps
     
     def check_dns_rate(self, ip, max_queries_per_minute):
-        """Kiểm tra số DNS queries per minute từ một IP"""
         current_time = time.time()
-        
-        # Lọc timestamps trong 60 giây qua
         self.dns_queries[ip] = [t for t in self.dns_queries[ip] if current_time - t < 60]
-        
-        # Thêm timestamp hiện tại
         self.dns_queries[ip].append(current_time)
-        
-        # Kiểm tra vượt ngưỡng
         return len(self.dns_queries[ip]) > max_queries_per_minute
     
     def increment_connection(self, ip):
-        """Tăng số connection từ một IP"""
         self.connection_counter[ip] += 1
     
     def check_connection_limit(self, ip, max_connections):
-        """Kiểm tra số connections từ một IP"""
         return self.connection_counter[ip] > max_connections
     
     def get_stats(self, ip):
-        """Lấy thống kê rate limiting cho một IP"""
         current_time = time.time()
-        
-        # Packets per second
         recent_packets = [t for t in self.packet_counter.get(ip, []) if current_time - t < 1]
-        pps = len(recent_packets)
-        
-        # DNS queries per minute
         recent_dns = [t for t in self.dns_queries.get(ip, []) if current_time - t < 60]
-        qpm = len(recent_dns)
-        
-        # Connections
-        connections = self.connection_counter.get(ip, 0)
-        
         return {
-            'pps': pps,
-            'qpm': qpm,
-            'connections': connections
+            'pps': len(recent_packets),
+            'qpm': len(recent_dns),
+            'connections': self.connection_counter.get(ip, 0)
         }
 
 
-# ========== HÀM LOG CÓ THỜI GIAN ==========
+# ========== HÀM LOG ==========
 def log(msg):
     tz = pytz.timezone("Asia/Ho_Chi_Minh")
     now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
@@ -106,7 +158,6 @@ def log(msg):
 
 # ========== ĐỌC RULES TỪ FILE JSON ==========
 def load_rules(rules_file="rules.json"):
-    """Đọc rules từ file JSON"""
     try:
         script_dir = Path(__file__).parent
         rules_path = script_dir / rules_file
@@ -125,18 +176,15 @@ def load_rules(rules_file="rules.json"):
 
     except json.JSONDecodeError as e:
         log(f"[!] Lỗi format JSON: {e}")
-        log("[!] Kiểm tra lại file rules.json")
         sys.exit(1)
-
     except Exception as e:
         log(f"[!] Lỗi đọc file rules: {e}")
         sys.exit(1)
 
 
 def create_default_rules(rules_path):
-    """Tạo file rules.json mẫu"""
     default_rules = {
-        "blocked_domains": ["facebook.com", "tiktok.com"],
+        "blocked_domains": ["facebook.com"],
         "blocked_ips": ["31.13."],
         "blocked_ports": [],
         "allowed_ips": [],
@@ -144,25 +192,23 @@ def create_default_rules(rules_path):
         "log_all_traffic": False,
         "block_icmp": False,
         "rate_limiting": {
-            "enabled": True,
+            "enabled": False,
             "max_packets_per_second": 100,
             "max_connections_per_ip": 50,
-            "max_dns_queries_per_minute": 60,
-            "action": "drop"
+            "max_dns_queries_per_minute": 60
         },
         "time_based_rules": {
-            "enabled": True,
+            "enabled": False,
             "timezone": "Asia/Ho_Chi_Minh",
-            "rules": [
-                {
-                    "name": "Block social media during work hours",
-                    "domains": ["facebook.com"],
-                    "days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
-                    "start_time": "08:00",
-                    "end_time": "17:00",
-                    "action": "block"
-                }
-            ]
+            "rules": []
+        },
+        "geo_blocking": {
+            "enabled": False,
+            "geoip_database": "/root/geoip/GeoLite2-Country.mmdb",
+            "blocked_countries": ["CN", "RU"],
+            "allowed_countries": ["VN", "US"],
+            "mode": "blacklist",
+            "log_country_info": True
         }
     }
 
@@ -176,7 +222,6 @@ def create_default_rules(rules_path):
 
 
 def reload_rules_if_changed(rules_file, last_mtime):
-    """Kiểm tra và reload rules nếu file thay đổi"""
     try:
         script_dir = Path(__file__).parent
         rules_path = script_dir / rules_file
@@ -189,14 +234,12 @@ def reload_rules_if_changed(rules_file, last_mtime):
             return rules, current_mtime
 
         return None, last_mtime
-
     except Exception as e:
         log(f"[!] Lỗi kiểm tra file: {e}")
         return None, last_mtime
 
 
 def print_rules_summary(rules):
-    """In tóm tắt rules"""
     log("=" * 70)
     log(" RULES HIỆN TẠI")
     log("=" * 70)
@@ -213,40 +256,43 @@ def print_rules_summary(rules):
     log(f"Block ICMP: {'Yes' if rules.get('block_icmp') else 'No'}")
     log(f"Log All Traffic: {'Yes' if rules.get('log_all_traffic') else 'No'}")
 
-    # Rate limiting summary
+    # Rate limiting
     rate_limit = rules.get('rate_limiting', {})
     if rate_limit.get('enabled'):
         log(f"Rate Limiting: Enabled")
-        log(f"  Max Packets/Second: {rate_limit.get('max_packets_per_second', 100)}")
-        log(f"  Max Connections/IP: {rate_limit.get('max_connections_per_ip', 50)}")
-        log(f"  Max DNS Queries/Minute: {rate_limit.get('max_dns_queries_per_minute', 60)}")
-        log(f"  Action: {rate_limit.get('action', 'drop').upper()}")
+        log(f"  Max PPS: {rate_limit.get('max_packets_per_second', 100)}")
+        log(f"  Max Conn/IP: {rate_limit.get('max_connections_per_ip', 50)}")
+        log(f"  Max DNS/Min: {rate_limit.get('max_dns_queries_per_minute', 60)}")
     else:
         log("Rate Limiting: Disabled")
 
-    # Time-based rules summary
+    # Time-based rules
     time_rules = rules.get('time_based_rules', {})
     if time_rules.get('enabled'):
         log(f"Time-based Rules: Enabled ({len(time_rules.get('rules', []))} rules)")
-        log(f"Timezone: {time_rules.get('timezone', 'UTC')}")
-        for idx, rule in enumerate(time_rules.get('rules', []), 1):
-            log(f"  {idx}. {rule['name']}")
-            log(f"     Days: {', '.join(rule['days'])}")
-            log(f"     Time: {rule['start_time']} - {rule['end_time']}")
-            log(f"     Action: {rule['action'].upper()}")
-            log(f"     Domains: {', '.join(rule['domains'])}")
     else:
         log("Time-based Rules: Disabled")
+
+    # Geo-blocking
+    geo = rules.get('geo_blocking', {})
+    if geo.get('enabled'):
+        log(f"Geo-blocking: Enabled")
+        log(f"  Mode: {geo.get('mode', 'blacklist').upper()}")
+        log(f"  Database: {geo.get('geoip_database', 'Not set')}")
+        if geo.get('mode') == 'blacklist':
+            log(f"  Blocked Countries: {', '.join(geo.get('blocked_countries', []))}")
+        else:
+            log(f"  Allowed Countries: {', '.join(geo.get('allowed_countries', []))}")
+    else:
+        log("Geo-blocking: Disabled")
 
     log("=" * 70)
 
 
-# ========== TIME-BASED RULES LOGIC ==========
+# ========== TIME-BASED RULES ==========
 def is_time_in_range(start_time_str, end_time_str, current_time):
-    """Kiểm tra xem thời gian hiện tại có nằm trong khoảng không"""
     start = datetime.strptime(start_time_str, "%H:%M").time()
     end = datetime.strptime(end_time_str, "%H:%M").time()
-
     if start <= end:
         return start <= current_time <= end
     else:
@@ -286,22 +332,23 @@ RULES_FILE = "rules.json"
 LAST_MTIME = 0
 PACKET_COUNT = 0
 RATE_LIMITER = RateLimiter()
+GEO_BLOCKER = None
 
 
 # ========== HÀM XỬ LÝ PACKET ==========
 def process_packet(packet):
-    global RULES, LAST_MTIME, PACKET_COUNT, RATE_LIMITER
+    global RULES, LAST_MTIME, PACKET_COUNT, RATE_LIMITER, GEO_BLOCKER
     
-    # Cleanup old data định kỳ
     RATE_LIMITER.cleanup_old_data()
     
-    # Kiểm tra và reload rules nếu file thay đổi
     PACKET_COUNT += 1
-    if PACKET_COUNT % 5  == 0:
+    if PACKET_COUNT % 5 == 0:
         new_rules, new_mtime = reload_rules_if_changed(RULES_FILE, LAST_MTIME)
         if new_rules:
             RULES = new_rules
             LAST_MTIME = new_mtime
+            # Reload geo blocker nếu config thay đổi
+            init_geo_blocker(RULES)
 
     try:
         scapy_packet = IP(packet.get_payload())
@@ -315,64 +362,71 @@ def process_packet(packet):
         if scapy_packet.haslayer(TCP):
             dst_port = scapy_packet[TCP].dport
             port_info = f":{dst_port}"
-            # Track TCP SYN connections
-            if scapy_packet[TCP].flags & 0x02:  # SYN flag
+            if scapy_packet[TCP].flags & 0x02:
                 RATE_LIMITER.increment_connection(src_ip)
         elif scapy_packet.haslayer(UDP):
             dst_port = scapy_packet[UDP].dport
             port_info = f":{dst_port}"
 
-        # ========== KIỂM TRA RATE LIMITING (ƯU TIÊN CAO) ==========
+        # ========== KIỂM TRA GEO-BLOCKING (ƯU TIÊN CAO NHẤT) ==========
+        if GEO_BLOCKER:
+            geo_config = RULES.get('geo_blocking', {})
+            should_block, country, reason = GEO_BLOCKER.should_block(dst_ip, geo_config)
+            
+            if should_block:
+                log(f"[GEO_BLOCKED] {src_ip} → {dst_ip}{port_info} | Country: {country} | {reason}")
+                packet.drop()
+                return
+            elif country and geo_config.get('log_country_info'):
+                if RULES.get('log_all_traffic', False):
+                    log(f"[GEO_INFO] {dst_ip} → Country: {country}")
+
+        # ========== KIỂM TRA RATE LIMITING ==========
         rate_limit_config = RULES.get('rate_limiting', {})
-        
         if rate_limit_config.get('enabled'):
-            # Kiểm tra packet rate
             max_pps = rate_limit_config.get('max_packets_per_second', 100)
             if RATE_LIMITER.check_packet_rate(src_ip, max_pps):
                 stats = RATE_LIMITER.get_stats(src_ip)
-                log(f"[RATE_LIMIT] {src_ip} → {dst_ip}{port_info} | PPS: {stats['pps']} (limit: {max_pps})")
+                log(f"[RATE_LIMIT] {src_ip} → {dst_ip}{port_info} | PPS: {stats['pps']} (max: {max_pps})")
                 packet.drop()
                 return
             
-            # Kiểm tra connection limit
             max_conn = rate_limit_config.get('max_connections_per_ip', 50)
             if RATE_LIMITER.check_connection_limit(src_ip, max_conn):
                 stats = RATE_LIMITER.get_stats(src_ip)
-                log(f"[RATE_LIMIT] {src_ip} → {dst_ip}{port_info} | Connections: {stats['connections']} (limit: {max_conn})")
+                log(f"[RATE_LIMIT] {src_ip} → {dst_ip}{port_info} | Conn: {stats['connections']} (max: {max_conn})")
                 packet.drop()
                 return
             
-            # Kiểm tra DNS query rate
             if scapy_packet.haslayer(DNS) and scapy_packet.haslayer(DNSQR):
                 max_dns = rate_limit_config.get('max_dns_queries_per_minute', 60)
                 if RATE_LIMITER.check_dns_rate(src_ip, max_dns):
                     stats = RATE_LIMITER.get_stats(src_ip)
-                    log(f"[RATE_LIMIT] {src_ip} DNS flood | QPM: {stats['qpm']} (limit: {max_dns})")
+                    log(f"[RATE_LIMIT] {src_ip} DNS flood | QPM: {stats['qpm']} (max: {max_dns})")
                     packet.drop()
                     return
 
-        # ========== KIỂM TRA ALLOWED IPS ==========
+        # ========== ALLOWED IPS ==========
         for allowed_ip in RULES.get('allowed_ips', []):
             if dst_ip.startswith(allowed_ip):
                 if RULES.get('log_all_traffic', False):
-                    log(f"[ALLOW] {proto_name} {src_ip} → {dst_ip}{port_info} (Whitelisted IP)")
+                    log(f"[ALLOW] {proto_name} {src_ip} → {dst_ip}{port_info} (Whitelisted)")
                 packet.accept()
                 return
 
-        # ========== KIỂM TRA BLOCK ICMP ==========
+        # ========== BLOCK ICMP ==========
         if RULES.get('block_icmp', False) and scapy_packet.haslayer(ICMP):
             log(f"[BLOCKED] ICMP {src_ip} → {dst_ip} (ICMP blocked)")
             packet.drop()
             return
 
-        # ========== XỬ LÝ DNS QUERIES ==========
+        # ========== DNS QUERIES ==========
         if scapy_packet.haslayer(DNS) and scapy_packet.haslayer(DNSQR):
             queried_domain = scapy_packet[DNSQR].qname.decode('utf-8').lower()
             
-            # Kiểm tra time-based rules
             time_action = check_time_based_rules(queried_domain, RULES)
             if time_action == "block":
-                log(f"[BLOCKED] DNS {src_ip} → {queried_domain.strip('.')} (Time-based rule)")
+                log(f"[BLOCKED] DNS {src_ip} → {queried_domain.strip('.')} (Time-based)")
                 packet.drop()
                 return
             elif time_action == "allow":
@@ -380,7 +434,6 @@ def process_packet(packet):
                 packet.accept()
                 return
             
-            # Kiểm tra allowed domains
             for allowed in RULES.get('allowed_domains', []):
                 if allowed in queried_domain:
                     if RULES.get('log_all_traffic', False):
@@ -388,27 +441,26 @@ def process_packet(packet):
                     packet.accept()
                     return
             
-            # Kiểm tra blocked domains
             for blocked in RULES.get('blocked_domains', []):
                 if blocked in queried_domain:
                     log(f"[BLOCKED] DNS {src_ip} → {queried_domain.strip('.')} (Domain blocked)")
                     packet.drop()
                     return
 
-        # ========== KIỂM TRA BLOCKED IPS ==========
+        # ========== BLOCKED IPS ==========
         for blocked_ip in RULES.get('blocked_ips', []):
             if dst_ip.startswith(blocked_ip):
                 log(f"[BLOCKED] {proto_name} {src_ip} → {dst_ip}{port_info} (IP blocked)")
                 packet.drop()
                 return
 
-        # ========== KIỂM TRA BLOCKED PORTS ==========
+        # ========== BLOCKED PORTS ==========
         if dst_port and dst_port in RULES.get('blocked_ports', []):
             log(f"[BLOCKED] {proto_name} {src_ip} → {dst_ip}:{dst_port} (Port blocked)")
             packet.drop()
             return
 
-        # ========== ACCEPT: Cho qua nếu không vi phạm ==========
+        # ========== ACCEPT ==========
         if RULES.get('log_all_traffic', False):
             log(f"[PASS] {proto_name} {src_ip} → {dst_ip}{port_info}")
 
@@ -419,21 +471,40 @@ def process_packet(packet):
         packet.accept()
 
 
+# ========== INIT GEO BLOCKER ==========
+def init_geo_blocker(rules):
+    global GEO_BLOCKER
+    geo_config = rules.get('geo_blocking', {})
+    
+    if not geo_config.get('enabled'):
+        return
+    
+    db_path = geo_config.get('geoip_database')
+    if not db_path:
+        log("[!] GeoIP database path không được cấu hình")
+        return
+    
+    # Expand đường dẫn (xử lý ~)
+    db_path = os.path.expanduser(db_path)
+    
+    GEO_BLOCKER = GeoBlocker(db_path)
+
+
 # ========== MAIN ==========
 def main():
-    global RULES, LAST_MTIME
+    global RULES, LAST_MTIME, GEO_BLOCKER
 
     if os.geteuid() != 0:
         log("[!] Script phải chạy với quyền root!")
-        log("Chạy: sudo python3 firewall.py")
         sys.exit(1)
 
     log("=" * 70)
-    log(" PYTHON FIREWALL - VM ROUTER (Rate Limiting + Time-based Rules)")
+    log(" PYTHON FIREWALL - Full Features")
     log("=" * 70)
     log("[*] Đang khởi động...")
 
     RULES = load_rules(RULES_FILE)
+    
     try:
         script_dir = Path(__file__).parent
         rules_path = script_dir / RULES_FILE
@@ -441,6 +512,9 @@ def main():
     except:
         LAST_MTIME = 0
 
+    # Initialize geo blocker
+    init_geo_blocker(RULES)
+    
     print_rules_summary(RULES)
 
     queue = NetfilterQueue()
@@ -448,7 +522,6 @@ def main():
 
     log("[*] Firewall đã sẵn sàng!")
     log(f"[*] Đang theo dõi file: {RULES_FILE}")
-    log("[*] Sửa file rules.json và lưu lại để reload rules tự động")
     log("[*] Nhấn Ctrl+C để dừng")
     log("-" * 70)
 
@@ -459,6 +532,8 @@ def main():
         log("[*] Đang dừng firewall...")
     finally:
         queue.unbind()
+        if GEO_BLOCKER:
+            GEO_BLOCKER.close()
         log("[*] Đã dừng!")
 
 
