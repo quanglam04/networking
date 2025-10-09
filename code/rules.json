@@ -4,7 +4,6 @@
     "tiktok.com",
     "instagram.com",
     "reddit.com"
-	
   ],
   "blocked_ips": [
     "31.13.",
@@ -17,14 +16,14 @@
   ],
   "allowed_ips": [],
   "allowed_domains": [],
-  "log_all_traffic": true,
+  "log_all_traffic": false,
   "block_icmp": false,
   
   "rate_limiting": {
     "enabled": false,
-    "max_packets_per_second": 5,
-    "max_connections_per_ip": 10,
-    "max_dns_queries_per_minute": 20,
+    "max_packets_per_second": 100,
+    "max_connections_per_ip": 50,
+    "max_dns_queries_per_minute": 60,
     "action": "drop"
   },
   
@@ -47,15 +46,16 @@
         "start_time": "22:00",
         "end_time": "06:00",
         "action": "block"
-      },
-      {
-        "name": "Allow gaming only on weekend",
-        "domains": ["steam.com", "epicgames.com"],
-        "days": ["saturday", "sunday"],
-        "start_time": "00:00",
-        "end_time": "23:59",
-        "action": "allow"
       }
     ]
+  },
+  
+  "geo_blocking": {
+    "enabled": true,
+    "geoip_database": "/home/trinhlam/firewall-project/networking/data/geoip/GeoLite2-Country.mmdb",
+    "blocked_countries": ["CN", "RU", "KP"],
+    "allowed_countries": ["VN", "US", "JP", "SG"],
+    "mode": "blacklist",
+    "log_country_info": true
   }
 }
