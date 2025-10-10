@@ -57,5 +57,19 @@
     "allowed_countries": ["VN", "US", "JP", "SG"],
     "mode": "blacklist",
     "log_country_info": true
+  },
+
+  "logging": {
+    "enabled": true,
+    "log_level": "info",
+    "log_to_file": true,
+    "log_file": "/var/log/firewall.log",
+    "log_rotation": true,
+    "max_log_size_mb": 100,
+    "log_format": "json",
+    "log_fields": [
+      "timestamp", "src_ip", "dst_ip", "protocol",
+      "port", "action", "bytes", "reason"
+    ]
   }
 }
