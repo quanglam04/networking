@@ -149,15 +149,115 @@ class RateLimiter:
         }
 
 
-# ========== HÀM LOG ==========
-def log(msg):
-    tz = pytz.timezone("Asia/Ho_Chi_Minh")
-    now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{now}] {msg}")
+# ========== BIẾN TOÀN CỤC CHO LOGGING ==========
+LOG_CONFIG = {}
+LOG_FILE_HANDLE = None
+LAST_LOG_CHECK = 0
+
+# ========== HÀM LOG (ADVANCED) ==========
+def log(msg, **kwargs):
+    """
+    Hàm log với advanced features và multiline format
+    kwargs có thể chứa: src_ip, dst_ip, protocol, port, action, bytes, reason
+    """
+    global LOG_CONFIG, LOG_FILE_HANDLE, LAST_LOG_CHECK
+    
+    # Nếu logging không enabled, chỉ print ra console
+    if not LOG_CONFIG.get('enabled', True):
+        print(msg)
+        return
+    
+    # Lấy timestamp
+    tz_str = LOG_CONFIG.get('timezone', 'Asia/Ho_Chi_Minh')
+    try:
+        tz = pytz.timezone(tz_str)
+    except:
+        tz = pytz.UTC
+    
+    timestamp = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Format log theo config
+    log_format = LOG_CONFIG.get('log_format', 'text')
+    
+    if log_format == 'json':
+        # Tạo JSON log entry
+        log_entry = {
+            'timestamp': timestamp
+        }
+        
+        # Thêm các fields theo config
+        log_fields = LOG_CONFIG.get('log_fields', [])
+        for field in log_fields:
+            if field == 'timestamp':
+                continue
+            elif field in kwargs:
+                log_entry[field] = kwargs[field]
+        
+        # Thêm message
+        log_entry['message'] = msg
+        
+        # JSON format với indent cho dễ nhìn
+        log_message = json.dumps(log_entry, indent=2, ensure_ascii=False)
+    else:
+        # Format text multiline
+        log_lines = [
+            "=" * 70,
+            f"[{timestamp}] {msg}"
+        ]
+        
+        # Thêm các kwargs nếu có
+        if kwargs:
+            for key, value in kwargs.items():
+                if value is not None:
+                    log_lines.append(f"-- {key}: {value}")
+        
+        log_lines.append("=" * 70)
+        log_message = "\n".join(log_lines)
+    
+    # Output ra console
+    print(log_message)
+    
+    # Ghi vào file nếu enabled
+    if LOG_CONFIG.get('log_to_file', False):
+        try:
+            log_file = LOG_CONFIG.get('log_file', '/var/log/firewall.log')
+            
+            # Kiểm tra log rotation (mỗi 10 giây check 1 lần)
+            current_time = time.time()
+            if LOG_CONFIG.get('log_rotation', False) and current_time - LAST_LOG_CHECK > 10:
+                LAST_LOG_CHECK = current_time
+                check_log_rotation(log_file)
+            
+            # Ghi vào file
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(log_message + '\n')
+        except Exception as e:
+            print(f"[!] Lỗi ghi log file: {e}")
+
+
+def check_log_rotation(log_file):
+    """Kiểm tra và thực hiện log rotation nếu cần"""
+    try:
+        if not os.path.exists(log_file):
+            return
+        
+        max_size_mb = LOG_CONFIG.get('max_log_size_mb', 100)
+        current_size_mb = os.path.getsize(log_file) / (1024 * 1024)
+        
+        if current_size_mb > max_size_mb:
+            # Rotate log file
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_file = f"{log_file}.{timestamp}"
+            os.rename(log_file, backup_file)
+            print(f"[*] Log rotated: {backup_file}")
+    except Exception as e:
+        print(f"[!] Lỗi log rotation: {e}")
 
 
 # ========== ĐỌC RULES TỪ FILE JSON ==========
 def load_rules(rules_file="rules.json"):
+    global LOG_CONFIG
+    
     try:
         script_dir = Path(__file__).parent
         rules_path = script_dir / rules_file
@@ -170,6 +270,31 @@ def load_rules(rules_file="rules.json"):
 
         with open(rules_path, 'r', encoding='utf-8') as f:
             rules = json.load(f)
+
+        # Load logging config
+        LOG_CONFIG = rules.get('logging', {
+            "enabled": True,
+            "log_level": "info",
+            "log_to_file": True,
+            "log_file": "/var/log/firewall.log",
+            "log_rotation": True,
+            "max_log_size_mb": 100,
+            "log_format": "json",
+            "log_fields": [
+            "timestamp", "src_ip", "dst_ip", "protocol",
+            "port", "action", "bytes", "reason"
+            ]
+        })
+        
+        # Tạo thư mục log nếu cần
+        if LOG_CONFIG.get('log_to_file'):
+            log_file = LOG_CONFIG.get('log_file', '/var/log/firewall.log')
+            log_dir = os.path.dirname(log_file)
+            if log_dir and not os.path.exists(log_dir):
+                try:
+                    os.makedirs(log_dir)
+                except Exception as e:
+                    print(f"[!] Không thể tạo thư mục log: {e}")
 
         log(f"[✓] Đã load rules từ: {rules_path}")
         return rules
@@ -209,6 +334,19 @@ def create_default_rules(rules_path):
             "allowed_countries": ["VN", "US"],
             "mode": "blacklist",
             "log_country_info": True
+        },
+        "logging": {
+            "enabled": True,
+            "log_level": "info",
+            "log_to_file": True,
+            "log_file": "/var/log/firewall.log",
+            "log_rotation": True,
+            "max_log_size_mb": 100,
+            "log_format": "json",
+            "log_fields": [
+                "timestamp", "src_ip", "dst_ip", "protocol",
+                "port", "action", "bytes", "reason"
+            ]
         }
     }
 
@@ -286,6 +424,18 @@ def print_rules_summary(rules):
     else:
         log("Geo-blocking: Disabled")
 
+    # Logging config
+    logging_config = rules.get('logging', {})
+    if logging_config.get('enabled'):
+        log(f"Advanced Logging: Enabled")
+        log(f"  Level: {logging_config.get('log_level', 'info').upper()}")
+        log(f"  Format: {logging_config.get('log_format', 'text').upper()}")
+        if logging_config.get('log_to_file'):
+            log(f"  File: {logging_config.get('log_file', '/var/log/firewall.log')}")
+            log(f"  Rotation: {'Yes' if logging_config.get('log_rotation') else 'No'}")
+    else:
+        log("Advanced Logging: Basic")
+
     log("=" * 70)
 
 
@@ -358,6 +508,7 @@ def process_packet(packet):
         proto_name = {1: "ICMP", 6: "TCP", 17: "UDP"}.get(protocol, f"Proto-{protocol}")
         port_info = ""
         dst_port = None
+        packet_bytes = len(packet.get_payload())
 
         if scapy_packet.haslayer(TCP):
             dst_port = scapy_packet[TCP].dport
@@ -368,13 +519,15 @@ def process_packet(packet):
             dst_port = scapy_packet[UDP].dport
             port_info = f":{dst_port}"
 
-        # ========== KIỂM TRA GEO-BLOCKING (ƯU TIÊN CAO NHẤT) ==========
+        # ========== KIỂM TRA GEO-BLOCKING ==========
         if GEO_BLOCKER:
             geo_config = RULES.get('geo_blocking', {})
             should_block, country, reason = GEO_BLOCKER.should_block(dst_ip, geo_config)
             
             if should_block:
-                log(f"[GEO_BLOCKED] {src_ip} → {dst_ip}{port_info} | Country: {country} | {reason}")
+                log(f"[GEO_BLOCKED] {src_ip} → {dst_ip}{port_info} | Country: {country} | {reason}",
+                    src_ip=src_ip, dst_ip=dst_ip, protocol=proto_name, port=dst_port,
+                    action="GEO_BLOCKED", bytes=packet_bytes, reason=reason)
                 packet.drop()
                 return
             elif country and geo_config.get('log_country_info'):
@@ -387,14 +540,18 @@ def process_packet(packet):
             max_pps = rate_limit_config.get('max_packets_per_second', 100)
             if RATE_LIMITER.check_packet_rate(src_ip, max_pps):
                 stats = RATE_LIMITER.get_stats(src_ip)
-                log(f"[RATE_LIMIT] {src_ip} → {dst_ip}{port_info} | PPS: {stats['pps']} (max: {max_pps})")
+                log(f"[RATE_LIMIT] {src_ip} → {dst_ip}{port_info} | PPS: {stats['pps']} (max: {max_pps})",
+                    src_ip=src_ip, dst_ip=dst_ip, protocol=proto_name, port=dst_port,
+                    action="RATE_LIMIT", bytes=packet_bytes, reason=f"PPS exceeded")
                 packet.drop()
                 return
             
             max_conn = rate_limit_config.get('max_connections_per_ip', 50)
             if RATE_LIMITER.check_connection_limit(src_ip, max_conn):
                 stats = RATE_LIMITER.get_stats(src_ip)
-                log(f"[RATE_LIMIT] {src_ip} → {dst_ip}{port_info} | Conn: {stats['connections']} (max: {max_conn})")
+                log(f"[RATE_LIMIT] {src_ip} → {dst_ip}{port_info} | Conn: {stats['connections']} (max: {max_conn})",
+                    src_ip=src_ip, dst_ip=dst_ip, protocol=proto_name, port=dst_port,
+                    action="RATE_LIMIT", bytes=packet_bytes, reason=f"Connection limit exceeded")
                 packet.drop()
                 return
             
@@ -402,7 +559,9 @@ def process_packet(packet):
                 max_dns = rate_limit_config.get('max_dns_queries_per_minute', 60)
                 if RATE_LIMITER.check_dns_rate(src_ip, max_dns):
                     stats = RATE_LIMITER.get_stats(src_ip)
-                    log(f"[RATE_LIMIT] {src_ip} DNS flood | QPM: {stats['qpm']} (max: {max_dns})")
+                    log(f"[RATE_LIMIT] {src_ip} DNS flood | QPM: {stats['qpm']} (max: {max_dns})",
+                        src_ip=src_ip, dst_ip=dst_ip, protocol="DNS", port=dst_port,
+                        action="RATE_LIMIT", bytes=packet_bytes, reason="DNS flood")
                     packet.drop()
                     return
 
@@ -410,13 +569,17 @@ def process_packet(packet):
         for allowed_ip in RULES.get('allowed_ips', []):
             if dst_ip.startswith(allowed_ip):
                 if RULES.get('log_all_traffic', False):
-                    log(f"[ALLOW] {proto_name} {src_ip} → {dst_ip}{port_info} (Whitelisted)")
+                    log(f"[ALLOW] {proto_name} {src_ip} → {dst_ip}{port_info} (Whitelisted)",
+                        src_ip=src_ip, dst_ip=dst_ip, protocol=proto_name, port=dst_port,
+                        action="ALLOW", bytes=packet_bytes, reason="Whitelisted")
                 packet.accept()
                 return
 
         # ========== BLOCK ICMP ==========
         if RULES.get('block_icmp', False) and scapy_packet.haslayer(ICMP):
-            log(f"[BLOCKED] ICMP {src_ip} → {dst_ip} (ICMP blocked)")
+            log(f"[BLOCKED] ICMP {src_ip} → {dst_ip} (ICMP blocked)",
+                src_ip=src_ip, dst_ip=dst_ip, protocol="ICMP", port=None,
+                action="BLOCKED", bytes=packet_bytes, reason="ICMP blocked")
             packet.drop()
             return
 
@@ -426,43 +589,57 @@ def process_packet(packet):
             
             time_action = check_time_based_rules(queried_domain, RULES)
             if time_action == "block":
-                log(f"[BLOCKED] DNS {src_ip} → {queried_domain.strip('.')} (Time-based)")
+                log(f"[BLOCKED] DNS {src_ip} → {queried_domain.strip('.')} (Time-based)",
+                    src_ip=src_ip, dst_ip=queried_domain.strip('.'), protocol="DNS", port=dst_port,
+                    action="BLOCKED", bytes=packet_bytes, reason="Time-based")
                 packet.drop()
                 return
             elif time_action == "allow":
-                log(f"[ALLOW] DNS {src_ip} → {queried_domain.strip('.')} (Time-based allow)")
+                log(f"[ALLOW] DNS {src_ip} → {queried_domain.strip('.')} (Time-based allow)",
+                    src_ip=src_ip, dst_ip=queried_domain.strip('.'), protocol="DNS", port=dst_port,
+                    action="ALLOW", bytes=packet_bytes, reason="Time-based allow")
                 packet.accept()
                 return
             
             for allowed in RULES.get('allowed_domains', []):
                 if allowed in queried_domain:
                     if RULES.get('log_all_traffic', False):
-                        log(f"[ALLOW] DNS {src_ip} → {queried_domain.strip('.')} (Whitelisted)")
+                        log(f"[ALLOW] DNS {src_ip} → {queried_domain.strip('.')} (Whitelisted)",
+                            src_ip=src_ip, dst_ip=queried_domain.strip('.'), protocol="DNS", port=dst_port,
+                            action="ALLOW", bytes=packet_bytes, reason="Whitelisted")
                     packet.accept()
                     return
             
             for blocked in RULES.get('blocked_domains', []):
                 if blocked in queried_domain:
-                    log(f"[BLOCKED] DNS {src_ip} → {queried_domain.strip('.')} (Domain blocked)")
+                    log(f"[BLOCKED] DNS {src_ip} → {queried_domain.strip('.')} (Domain blocked)",
+                        src_ip=src_ip, dst_ip=queried_domain.strip('.'), protocol="DNS", port=dst_port,
+                        action="BLOCKED", bytes=packet_bytes, reason="Domain blocked")
                     packet.drop()
                     return
 
         # ========== BLOCKED IPS ==========
         for blocked_ip in RULES.get('blocked_ips', []):
             if dst_ip.startswith(blocked_ip):
-                log(f"[BLOCKED] {proto_name} {src_ip} → {dst_ip}{port_info} (IP blocked)")
+                log(f"[BLOCKED] {proto_name} {src_ip} → {dst_ip}{port_info} (IP blocked)",
+                    src_ip=src_ip, dst_ip=dst_ip, protocol=proto_name, port=dst_port,
+                    action="BLOCKED", bytes=packet_bytes, reason="IP blocked")
                 packet.drop()
                 return
 
         # ========== BLOCKED PORTS ==========
         if dst_port and dst_port in RULES.get('blocked_ports', []):
-            log(f"[BLOCKED] {proto_name} {src_ip} → {dst_ip}:{dst_port} (Port blocked)")
+            log(f"[BLOCKED] {proto_name} {src_ip} → {dst_ip}:{dst_port} (Port blocked)",
+                src_ip=src_ip, dst_ip=dst_ip, protocol=proto_name, port=dst_port,
+                action="BLOCKED", bytes=packet_bytes, reason="Port blocked")
             packet.drop()
             return
 
         # ========== ACCEPT ==========
         if RULES.get('log_all_traffic', False):
-            log(f"[PASS] {proto_name} {src_ip} → {dst_ip}{port_info}")
+            log(f"[PASS] {proto_name} {src_ip} → {dst_ip}{port_info}",
+                src_ip=src_ip, dst_ip=dst_ip, protocol=proto_name, port=dst_port,
+                action="PASS", bytes=packet_bytes, reason="")
 
         packet.accept()
         
@@ -528,7 +705,7 @@ def main():
     try:
         queue.run()
     except KeyboardInterrupt:
-        log("-" * 70)
+        log("-" *70)
         log("[*] Đang dừng firewall...")
     finally:
         queue.unbind()
