@@ -1,10 +1,10 @@
 from scapy.all import IP, TCP, UDP, ICMP, DNS, DNSQR
 from datetime import datetime
 import pytz
-from core.logger import log
-from features.rate_limiter import RateLimiter
-from features.geo_blocker import GeoBlocker
-from config.rules_manager import reload_rules_if_changed, print_rules_summary
+from core.logger import log 
+from features.rate_limiter import RateLimiter 
+from features.geo_blocker import GeoBlocker 
+from config.rules_manager import reload_rules_if_changed, print_rules_summary 
 import time
 
 # Global State (Biến trạng thái toàn cục)
@@ -15,51 +15,25 @@ RATE_LIMITER = RateLimiter()
 GEO_BLOCKER = None 
 
 # ========== CẤU HÌNH LỌC LOG MỤC TIÊU (SỬA GIÁ TRỊ NÀY) ==========
-# 1. IP Nguồn Cần Theo Dõi: Chỉ ghi log gói tin đến từ IP này.
 TARGET_LOG_SRC_IP = "192.168.100.10" 
-
-# 2. IP Đích Bị Loại Trừ (Exclusion List): Không ghi log bất kỳ gói tin nào đến các IP này.
 EXCLUDED_DST_IPS = ["8.8.8.8", "1.1.1.1"]
 
 def update_global_state(rules, last_mtime, geo_blocker):
-    global RULES, LAST_MTME, GEO_BLOCKER
+    global RULES, LAST_MTIME, GEO_BLOCKER
     RULES = rules
     LAST_MTIME = last_mtime
     GEO_BLOCKER = geo_blocker
 
-# ========== TIME-BASED RULES LOGIC (Giữ nguyên) ==========
+# ========== TIME-BASED RULES LOGIC (Hàm dùng chung) ==========
 def is_time_in_range(start_time_str, end_time_str, current_time):
     start = datetime.strptime(start_time_str, "%H:%M").time()
     end = datetime.strptime(end_time_str, "%H:%M").time()
     if start <= end:
-        return start <= current_time <= end
+        return start <= current_time < end
     else:
-        return current_time >= start or current_time <= end
+        return current_time >= start or current_time < end
 
-def check_time_based_rules(domain, rules):
-    time_rules_config = rules.get('time_based_rules', {})
-    if not time_rules_config.get('enabled'):
-        return None
-    timezone_str = time_rules_config.get('timezone', 'UTC')
-    try:
-        tz = pytz.timezone(timezone_str)
-    except:
-        tz = pytz.UTC
-
-    now = datetime.now(tz)
-    current_day = now.strftime("%A").lower()
-    current_time = now.time()
-
-    for rule in time_rules_config.get('rules', []):
-        if not any(r in domain for r in rule.get('domains', [])):
-            continue
-        if current_day not in rule.get('days', []):
-            continue
-        if not is_time_in_range(rule['start_time'], rule['end_time'], current_time):
-            continue
-        return rule.get('action', 'block')
-
-    return None
+# Hàm check_time_based_rules() đã được loại bỏ
 
 # ========== HÀM XỬ LÝ PACKET CHÍNH ==========
 def process_packet(packet):
@@ -92,18 +66,16 @@ def process_packet(packet):
         # ==========================================================
         # ============ LOGIC LỌC GÓI TIN (ĐIỀU KIỆN KÉP) ===========
         # ==========================================================
-        is_log_filtered = bool(TARGET_LOG_SRC_IP) # Kiểm tra lọc log theo nguồn có được bật không
+        is_log_filtered = bool(TARGET_LOG_SRC_IP) 
 
-        # 1. BƯỚC LỌC ĐẦU TIÊN: Loại bỏ IP đích không mong muốn (8.8.8.8, 1.1.1.1)
         if dst_ip in EXCLUDED_DST_IPS:
-             packet.accept()
-             return
-             
+            packet.accept()
+            return
+            
         # 2. BƯỚC LỌC THỨ HAI: Chỉ cho phép gói tin từ TARGET_LOG_SRC_IP tiếp tục xử lý
         if is_log_filtered and src_ip != TARGET_LOG_SRC_IP:
-             # Chấp nhận gói tin (không log, không kiểm tra rule) và thoát.
-             packet.accept()
-             return 
+            packet.accept()
+            return 
 
         # ... (Khối xác định Port và cờ SYN giữ nguyên) ...
 
@@ -128,7 +100,6 @@ def process_packet(packet):
                 packet.drop()
                 return
             elif country and geo_config.get('log_country_info'):
-                # Chỉ log INFO nếu log_all_traffic BẬT
                 if RULES.get('log_all_traffic', False):
                     log(f"[GEO_INFO] {dst_ip} → Country: {country}")
 
@@ -154,6 +125,7 @@ def process_packet(packet):
                 packet.drop()
                 return
             
+            # GIỮ LẠI LOGIC RATE LIMIT cho DNS
             if scapy_packet.haslayer(DNS) and scapy_packet.haslayer(DNSQR):
                 max_dns = rate_limit_config.get('max_dns_queries_per_minute', 60)
                 if RATE_LIMITER.check_dns_rate(src_ip, max_dns):
@@ -164,7 +136,7 @@ def process_packet(packet):
                     packet.drop()
                     return
 
-        # 3. ALLOWED IPS (Log sẽ được gọi nếu log_all_traffic BẬT)
+        # 3. ALLOWED IPS
         for allowed_ip in RULES.get('allowed_ips', []):
             if dst_ip.startswith(allowed_ip):
                 if RULES.get('log_all_traffic', False):
@@ -173,54 +145,64 @@ def process_packet(packet):
                         action="ALLOW", bytes=packet_bytes, reason="Whitelisted")
                 packet.accept()
                 return
+                
+        # ==========================================================
+        # 3.5. KIỂM TRA TIME-BASED RULE CHO IP ĐÍCH (DEMO PING/ICMP)
+        # ==========================================================
+        time_based_config = RULES.get('time_based_rules', {})
+        
+        if time_based_config.get('enabled'):
+            timezone_str = time_based_config.get('timezone', 'UTC')
+            try:
+                tz = pytz.timezone(timezone_str)
+            except:
+                tz = pytz.UTC
 
-        # 4. BLOCK ICMP
+            now = datetime.now(tz)
+            current_day = now.strftime("%A").lower()
+            current_time = now.time()
+
+            for rule in time_based_config.get('rules', []):
+                # CHỈ XỬ LÝ rule CÓ 'action': 'block_ip_time'
+                if rule.get('action') == 'block_ip_time':
+                    
+                    target_ips = rule.get('target_ips', [])
+                    # Đảm bảo rule này chỉ áp dụng nếu có target_ips
+                    if not target_ips or not any(dst_ip.startswith(ip) for ip in target_ips):
+                        continue
+
+                    if current_day not in rule.get('days', []):
+                        continue
+                    if not is_time_in_range(rule['start_time'], rule['end_time'], current_time):
+                        continue
+                    
+                    log(f"[BLOCKED] {proto_name} {src_ip} → {dst_ip}{port_info} (Time-based IP Block)",
+                        src_ip=src_ip, dst_ip=dst_ip, protocol=proto_name, port=dst_port,
+                        action="BLOCKED", bytes=packet_bytes, reason="Time-based IP Block")
+                    packet.drop()
+                    return 
+
+        # 4. BLOCK ICMP (Logic chặn ICMP cố định)
         if RULES.get('block_icmp', False) and scapy_packet.haslayer(ICMP):
             log(f"[BLOCKED] ICMP {src_ip} → {dst_ip} (ICMP blocked)",
                 src_ip=src_ip, dst_ip=dst_ip, protocol="ICMP", port=None,
                 action="BLOCKED", bytes=packet_bytes, reason="ICMP blocked")
             packet.drop()
             return
-
+            
         # 5. DNS QUERIES
         if scapy_packet.haslayer(DNS) and scapy_packet.haslayer(DNSQR):
             queried_domain = scapy_packet[DNSQR].qname.decode('utf-8').lower()
             
-            # Check Time-based rules
-            time_action = check_time_based_rules(queried_domain, RULES)
-            if time_action == "block":
-                log(f"[BLOCKED] DNS {src_ip} → {queried_domain.strip('.')} (Time-based)",
+            # Khối DNS hiện tại chỉ còn lại logic Rate Limiting và Logging.
+            # Không có Blocked/Allowed Domains cố định nào được kiểm tra.
+            if RULES.get('log_all_traffic', False):
+                log(f"[PASS] DNS {src_ip} → {queried_domain.strip('.')}",
                     src_ip=src_ip, dst_ip=queried_domain.strip('.'), protocol="DNS", port=dst_port,
-                    action="BLOCKED", bytes=packet_bytes, reason="Time-based")
-                packet.drop()
-                return
-            elif time_action == "allow":
-                if RULES.get('log_all_traffic', False):
-                    log(f"[ALLOW] DNS {src_ip} → {queried_domain.strip('.')} (Time-based allow)",
-                        src_ip=src_ip, dst_ip=queried_domain.strip('.'), protocol="DNS", port=dst_port,
-                        action="ALLOW", bytes=packet_bytes, reason="Time-based allow")
-                packet.accept()
-                return
-            
-            # Check Allowed/Blocked Domains
-            for allowed in RULES.get('allowed_domains', []):
-                if allowed in queried_domain:
-                    if RULES.get('log_all_traffic', False):
-                        log(f"[ALLOW] DNS {src_ip} → {queried_domain.strip('.')} (Whitelisted)",
-                            src_ip=src_ip, dst_ip=queried_domain.strip('.'), protocol="DNS", port=dst_port,
-                            action="ALLOW", bytes=packet_bytes, reason="Whitelisted")
-                    packet.accept()
-                    return
-            
-            for blocked in RULES.get('blocked_domains', []):
-                if blocked in queried_domain:
-                    log(f"[BLOCKED] DNS {src_ip} → {queried_domain.strip('.')} (Domain blocked)",
-                        src_ip=src_ip, dst_ip=queried_domain.strip('.'), protocol="DNS", port=dst_port,
-                        action="BLOCKED", bytes=packet_bytes, reason="Domain blocked")
-                    packet.drop()
-                    return
+                    action="PASS", bytes=packet_bytes, reason="")
 
-        # 6. BLOCKED IPS
+
+        # 6. BLOCKED IPS (Sẽ chứa các IP chặn Facebook/YouTube cố định)
         if dst_ip.startswith(tuple(RULES.get('blocked_ips', []))): 
             log(f"[BLOCKED] {proto_name} {src_ip} → {dst_ip}{port_info} (IP blocked)",
                 src_ip=src_ip, dst_ip=dst_ip, protocol=proto_name, port=dst_port,
@@ -237,7 +219,6 @@ def process_packet(packet):
             return
 
         # 8. ACCEPT (Default Policy)
-        # CHỈ log gói tin PASS nếu log_all_traffic BẬT.
         if RULES.get('log_all_traffic', False):
             log(f"[PASS] {proto_name} {src_ip} → {dst_ip}{port_info}",
                 src_ip=src_ip, dst_ip=dst_ip, protocol=proto_name, port=dst_port,

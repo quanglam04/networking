@@ -1,10 +1,9 @@
 {
-  "blocked_domains": [
-    "facebook.com"
-  ],
+  "blocked_domains": [],
   "blocked_ips": [
-    "31.13.",
-    "157.240."
+    "31.13.",     
+    "157.240.",   
+    "172.253."
   ],
   "blocked_ports": [
     22,
@@ -29,12 +28,12 @@
     "timezone": "Asia/Ho_Chi_Minh",
     "rules": [
       {
-        "name": "Block social media during work hours",
-        "domains": ["tiktok.com"],
-        "days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
-        "start_time": "08:00",
-        "end_time": "18:00",
-        "action": "block"
+        "name": "DEMO: Block YouTube IP by Time (For Ping)",
+        "target_ips": ["142.250.197.110"],
+        "days": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+        "start_time": "23:15",
+        "end_time": "23:59",
+        "action": "block_ip_time" 
       }
     ]
   },
