@@ -1,10 +1,7 @@
 from collections import defaultdict
 import time
-# Import log từ core
-# from core.logger import log # Có thể không cần log ở đây vì nó chỉ là logic đếm
 
 class RateLimiter:
-    """Class quản lý tính năng Rate Limiting (chống flood)."""
     def __init__(self):
         # ... (Toàn bộ RateLimiter.__init__ từ code gốc) ...
         self.packet_counter = defaultdict(list)

@@ -1,11 +1,9 @@
 import os
 import geoip2.database
 import geoip2.errors
-# Import log từ core
 from core.logger import log
 
 class GeoBlocker:
-    """Class quản lý tính năng Geo-blocking."""
     def __init__(self, db_path):
         # ... (Toàn bộ GeoBlocker.__init__ từ code gốc) ...
         self.reader = None
