@@ -4,6 +4,7 @@ import pytz
 from core.logger import log 
 from features.rate_limiter import RateLimiter 
 from features.geo_blocker import GeoBlocker 
+from features.packet_size_filter import check_packet_size 
 from config.rules_manager import reload_rules_if_changed, print_rules_summary 
 import time
 
@@ -135,6 +136,16 @@ def process_packet(packet):
                         action="RATE_LIMIT", bytes=packet_bytes, reason="DNS flood")
                     packet.drop()
                     return
+        # ==========================================================
+        # 2.5. KIỂM TRA ĐỘ DÀI GÓI TIN (PACKET SIZE FILTERING)
+        # ==========================================================
+        should_block, reason = check_packet_size(packet_bytes, RULES)
+        if should_block:
+            log(f"[BLOCKED] {proto_name} {src_ip} → {dst_ip}{port_info} ({reason})",
+                src_ip=src_ip, dst_ip=dst_ip, protocol=proto_name, port=dst_port,
+                action="BLOCKED", bytes=packet_bytes, reason=reason)
+            packet.drop()
+            return
 
         # 3. ALLOWED IPS
         for allowed_ip in RULES.get('allowed_ips', []):
