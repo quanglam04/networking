@@ -1,9 +1,10 @@
 {
   "blocked_domains": [],
   "blocked_ips": [
-    "31.13.",     
-    "157.240.",   
-    "172.253."
+    "31.13.",    
+    "157.240.",  
+    "172.253.",  
+    "142.250."   
   ],
   "blocked_ports": [
     22,
@@ -45,6 +46,12 @@
     "allowed_countries": ["VN", "US", "JP", "SG"],
     "mode": "blacklist",
     "log_country_info": true
+  },
+  
+  "packet_size_filtering": {
+    "enabled": true,
+    "min_size": 40,   
+    "max_size": 100  
   },
 
   "logging": {
