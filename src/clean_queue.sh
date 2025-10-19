@@ -46,7 +46,7 @@ flush_nfqueue() {
     echo -e "${YELLOW}[2/6]${NC} Đang flush NFQUEUE rules..."
     
     # Xóa NFQUEUE rules khỏi FORWARD chain
-    iptables -D FORWARD -j NFQUEUE --queue-num 0 2>/dev/null
+    iptables -D FORWARD -j NFQUEUE --queue-num 1 2>/dev/null
     
     # Xóa tất cả NFQUEUE rules
     iptables -t filter -L FORWARD --line-numbers -n | grep NFQUEUE | awk '{print $1}' | sort -rn | while read line; do
@@ -168,7 +168,7 @@ setup_clean_iptables() {
         fi
         
         # Setup NFQUEUE
-        iptables -I FORWARD -j NFQUEUE --queue-num 0
+        sudo iptables -I FORWARD -j NFQUEUE --queue-num 1
         echo -e "${GREEN}✓ Setup NFQUEUE queue-num 0${NC}"
         
         echo ""
@@ -206,5 +206,5 @@ echo "- Firewall process đã dừng"
 echo "- Network buffers đã flush"
 echo ""
 echo -e "${YELLOW}Để khởi động lại firewall:${NC}"
-echo "  sudo /home/trinhlam/fwenv/bin/python3 firewall.py "
+echo "  sudo /home/trinhlam/fwenv/bin/python3 main.py "
 echo ""
