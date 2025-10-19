@@ -5,7 +5,6 @@ from core.logger import log
 
 class GeoBlocker:
     def __init__(self, db_path):
-        # ... (Toàn bộ GeoBlocker.__init__ từ code gốc) ...
         self.reader = None
         self.db_path = db_path
         self.cache = {}  # IP -> Country code cache
@@ -24,7 +23,6 @@ class GeoBlocker:
             log("[!] Geo-blocking sẽ bị tắt")
     
     def get_country(self, ip):
-        # ... (Toàn bộ GeoBlocker.get_country từ code gốc) ...
         if self.reader is None:
             return None
         
@@ -46,7 +44,6 @@ class GeoBlocker:
             return None
     
     def should_block(self, ip, config):
-        # ... (Toàn bộ GeoBlocker.should_block từ code gốc) ...
         if not config.get('enabled'):
             return False, None, None
         
@@ -70,12 +67,10 @@ class GeoBlocker:
         return False, country, None
     
     def close(self):
-        # ... (Toàn bộ GeoBlocker.close từ code gốc) ...
         if self.reader:
             self.reader.close()
 
 def init_geo_blocker(rules):
-    """Khởi tạo hoặc trả về GeoBlocker mới nếu config được kích hoạt."""
     geo_config = rules.get('geo_blocking', {})
     
     if not geo_config.get('enabled'):

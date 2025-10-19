@@ -3,7 +3,6 @@ import time
 
 class RateLimiter:
     def __init__(self):
-        # ... (Toàn bộ RateLimiter.__init__ từ code gốc) ...
         self.packet_counter = defaultdict(list)
         self.connection_counter = defaultdict(int)
         self.dns_queries = defaultdict(list)
@@ -11,7 +10,6 @@ class RateLimiter:
         self.last_cleanup = time.time()
     
     def cleanup_old_data(self):
-        # ... (Toàn bộ RateLimiter.cleanup_old_data từ code gốc) ...
         current_time = time.time()
         if current_time - self.last_cleanup < self.cleanup_interval:
             return
@@ -29,29 +27,24 @@ class RateLimiter:
         self.last_cleanup = current_time
     
     def check_packet_rate(self, ip, max_pps):
-        # ... (Toàn bộ RateLimiter.check_packet_rate từ code gốc) ...
         current_time = time.time()
         self.packet_counter[ip] = [t for t in self.packet_counter[ip] if current_time - t < 1]
         self.packet_counter[ip].append(current_time)
         return len(self.packet_counter[ip]) > max_pps
     
     def check_dns_rate(self, ip, max_queries_per_minute):
-        # ... (Toàn bộ RateLimiter.check_dns_rate từ code gốc) ...
         current_time = time.time()
         self.dns_queries[ip] = [t for t in self.dns_queries[ip] if current_time - t < 60]
         self.dns_queries[ip].append(current_time)
         return len(self.dns_queries[ip]) > max_queries_per_minute
     
     def increment_connection(self, ip):
-        # ... (Toàn bộ RateLimiter.increment_connection từ code gốc) ...
         self.connection_counter[ip] += 1
     
     def check_connection_limit(self, ip, max_connections):
-        # ... (Toàn bộ RateLimiter.check_connection_limit từ code gốc) ...
         return self.connection_counter[ip] > max_connections
     
     def get_stats(self, ip):
-        # ... (Toàn bộ RateLimiter.get_stats từ code gốc) ...
         current_time = time.time()
         recent_packets = [t for t in self.packet_counter.get(ip, []) if current_time - t < 1]
         recent_dns = [t for t in self.dns_queries.get(ip, []) if current_time - t < 60]

@@ -1,12 +1,12 @@
+import pytz
+import time
 from scapy.all import IP, TCP, UDP, ICMP, DNS, DNSQR
 from datetime import datetime
-import pytz
 from core.logger import log 
 from features.rate_limiter import RateLimiter 
 from features.geo_blocker import GeoBlocker 
 from features.packet_size_filter import check_packet_size 
 from config.rules_manager import reload_rules_if_changed, print_rules_summary 
-import time
 
 # Global State (Biến trạng thái toàn cục)
 RULES = {}
@@ -14,8 +14,11 @@ LAST_MTIME = 0
 PACKET_COUNT = 0
 RATE_LIMITER = RateLimiter() 
 GEO_BLOCKER = None 
+# Các mã màu ANSI
+RED = '\033[0;31m'    # Đỏ
+GREEN = '\033[0;32m'  # Xanh lá
+NC = '\033[0m'       # No Color (Reset về màu mặc định)
 
-# ========== CẤU HÌNH LỌC LOG MỤC TIÊU (SỬA GIÁ TRỊ NÀY) ==========
 TARGET_LOG_SRC_IP = "192.168.100.10" 
 EXCLUDED_DST_IPS = ["8.8.8.8", "1.1.1.1"]
 
@@ -34,7 +37,6 @@ def is_time_in_range(start_time_str, end_time_str, current_time):
     else:
         return current_time >= start or current_time < end
 
-# Hàm check_time_based_rules() đã được loại bỏ
 
 # ========== HÀM XỬ LÝ PACKET CHÍNH ==========
 def process_packet(packet):
@@ -77,8 +79,6 @@ def process_packet(packet):
         if is_log_filtered and src_ip != TARGET_LOG_SRC_IP:
             packet.accept()
             return 
-
-        # ... (Khối xác định Port và cờ SYN giữ nguyên) ...
 
         if scapy_packet.haslayer(TCP):
             dst_port = scapy_packet[TCP].dport

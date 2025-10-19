@@ -1,11 +1,8 @@
-#!/usr/bin/env python3
-from netfilterqueue import NetfilterQueue
 import os
 import sys
-from pathlib import Path
 import time
-
-# Import các module đã refactor
+from netfilterqueue import NetfilterQueue
+from pathlib import Path
 from config.rules_manager import load_rules, print_rules_summary, RULES_FILE
 from core.packet_processor import process_packet, update_global_state, RATE_LIMITER
 from core.logger import log 
@@ -21,10 +18,8 @@ def main():
     log("=" * 70)
     log("[*] Đang khởi động...")
 
-    # Load Rules
     rules = load_rules(RULES_FILE)
     
-    # Lấy mtime để theo dõi thay đổi
     try:
         script_dir = Path(__file__).parent
         rules_path = script_dir / RULES_FILE
@@ -44,7 +39,6 @@ def main():
     queue = NetfilterQueue()
     queue.bind(1, process_packet)
     log("Tạo Queue thành công")
-
     log("[*] Firewall đã sẵn sàng!")
     log(f"[*] Đang theo dõi file: {RULES_FILE}")
     log("[*] Nhấn Ctrl+C để dừng")
