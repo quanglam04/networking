@@ -42,7 +42,8 @@ def main():
     print_rules_summary(rules)
 
     queue = NetfilterQueue()
-    queue.bind(0, process_packet)
+    queue.bind(1, process_packet)
+    log("Tạo Queue thành công")
 
     log("[*] Firewall đã sẵn sàng!")
     log(f"[*] Đang theo dõi file: {RULES_FILE}")

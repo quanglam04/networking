@@ -3,8 +3,7 @@
   "blocked_ips": [
     "31.13.",    
     "157.240.",  
-    "172.253.",  
-    "142.250."   
+    "172.253."
   ],
   "blocked_ports": [
     22,
@@ -13,7 +12,7 @@
   ],
   "allowed_ips": [],
   "allowed_domains": [],
-  "log_all_traffic": true,
+  "log_all_traffic": false,
   "block_icmp": false,
   
   "rate_limiting": {
@@ -32,7 +31,7 @@
         "name": "DEMO: Block YouTube IP by Time (For Ping)",
         "target_ips": ["142.250.197.110"],
         "days": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
-        "start_time": "23:15",
+        "start_time": "13:00",
         "end_time": "23:59",
         "action": "block_ip_time" 
       }
@@ -50,8 +49,8 @@
   
   "packet_size_filtering": {
     "enabled": true,
-    "min_size": 40,   
-    "max_size": 100  
+    "min_size": 5,   
+    "max_size": 300
   },
 
   "logging": {
